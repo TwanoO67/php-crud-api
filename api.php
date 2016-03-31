@@ -569,6 +569,136 @@ class SQLServer implements DatabaseInterface {
 	}
 }
 
+class SQLite implements DatabaseInterface {
+
+	protected $db;
+	protected $queries;
+
+	public function __construct() {
+		$this->queries = array(
+			'list_tables'=>'SELECT name as TABLE_NAME, "" as TABLE_COMMENT FROM sqlite_master WHERE type="table";',
+			'reflect_table'=>'pragma table_info(?);',
+			'reflect_pk'=>'PRAGMA foreign_key_list(?);',
+			'reflect_belongs_to'=>'SELECT
+					"TABLE_NAME","COLUMN_NAME",
+					"REFERENCED_TABLE_NAME","REFERENCED_COLUMN_NAME"
+				FROM
+					"INFORMATION_SCHEMA"."KEY_COLUMN_USAGE"
+				WHERE
+					"TABLE_NAME" COLLATE \'utf8_bin\' = ? AND
+					"REFERENCED_TABLE_NAME" COLLATE \'utf8_bin\' IN ? AND
+					"TABLE_SCHEMA" = ? AND
+					"REFERENCED_TABLE_SCHEMA" = ?',
+			'reflect_has_many'=>'SELECT
+					"TABLE_NAME","COLUMN_NAME",
+					"REFERENCED_TABLE_NAME","REFERENCED_COLUMN_NAME"
+				FROM
+					"INFORMATION_SCHEMA"."KEY_COLUMN_USAGE"
+				WHERE
+					"TABLE_NAME" COLLATE \'utf8_bin\' IN ? AND
+					"REFERENCED_TABLE_NAME" COLLATE \'utf8_bin\' = ? AND
+					"TABLE_SCHEMA" = ? AND
+					"REFERENCED_TABLE_SCHEMA" = ?',
+			'reflect_habtm'=>'SELECT
+					k1."TABLE_NAME", k1."COLUMN_NAME",
+					k1."REFERENCED_TABLE_NAME", k1."REFERENCED_COLUMN_NAME",
+					k2."TABLE_NAME", k2."COLUMN_NAME",
+					k2."REFERENCED_TABLE_NAME", k2."REFERENCED_COLUMN_NAME"
+				FROM
+					"INFORMATION_SCHEMA"."KEY_COLUMN_USAGE" k1,
+					"INFORMATION_SCHEMA"."KEY_COLUMN_USAGE" k2
+				WHERE
+					k1."TABLE_SCHEMA" = ? AND
+					k2."TABLE_SCHEMA" = ? AND
+					k1."REFERENCED_TABLE_SCHEMA" = ? AND
+					k2."REFERENCED_TABLE_SCHEMA" = ? AND
+					k1."TABLE_NAME" COLLATE \'utf8_bin\' = k2."TABLE_NAME" COLLATE \'utf8_bin\' AND
+					k1."REFERENCED_TABLE_NAME" COLLATE \'utf8_bin\' = ? AND
+					k2."REFERENCED_TABLE_NAME" COLLATE \'utf8_bin\' IN ?'
+		);
+	}
+
+	public function getSql($name) {
+		return isset($this->queries[$name])?$this->queries[$name]:false;
+	}
+
+	public function connect($hostname,$username,$password,$database,$port,$socket,$charset) {
+		$this->db = new SQLite3($hostname);
+	}
+
+	public function query($sql,$params) {
+		$db = $this->db;
+		$sql = preg_replace_callback('/\!|\?/', function ($matches) use (&$db,&$params) {
+			$param = array_shift($params);
+			if ($matches[0]=='!') return preg_replace('/[^a-zA-Z0-9\-_=<> ]/','',$param);
+			if (is_array($param)) return '('.implode(',',array_map(function($v) use (&$db) {
+				return "'".mysqli_real_escape_string($db,$v)."'";
+			},$param)).')';
+			if (is_object($param) && $param->type=='base64') {
+				return "x'".bin2hex(base64_decode($param->data))."'";
+			}
+			if ($param===null) return 'NULL';
+			return "'".mysqli_real_escape_string($db,$param)."'";
+		}, $sql);
+		//if (!strpos($sql,'INFORMATION_SCHEMA')) echo "\n$sql\n";
+		return $db->query($sql);
+	}
+
+	public function fetchAssoc($result) {
+		return $result->fetchArray(SQLITE3_ASSOC);
+	}
+
+	public function fetchRow($result) {
+		return $result->fetchArray(SQLITE3_NUM);
+	}
+
+	public function insertId($result) {
+		return $this->db->lastInsertRowID();
+	}
+
+	public function affectedRows($result) {
+		return $this->db->changes();
+	}
+
+	public function close($result) {
+		$result->finalize();
+		return $this->db->close();
+	}
+
+	public function fetchFields($result) {
+		$fields = array();
+		for($i = 0; $i < $result->numColumns ; $i++){
+			$tab = array();
+			$tab['type'] = $result->columnType($i);
+			$tab['name'] = $result->columnName($i);
+			$fields[] = $tab;
+		}
+		return $fields;
+	}
+
+	public function addLimitToSql($sql,$limit,$offset) {
+		return "$sql LIMIT $limit OFFSET $offset";
+	}
+
+	public function likeEscape($string) {
+		return addcslashes($string,'%_');
+	}
+
+	public function isBinaryType($field) {
+		//echo "$field->name: $field->type ($field->flags)\n";
+		return (($field->flags & 128) && ($field->type>=249) && ($field->type<=252));
+	}
+
+	public function base64Encode($string) {
+		return base64_encode($string);
+	}
+
+	public function getDefaultCharset() {
+		return 'utf8';
+	}
+
+}
+
 class PHP_CRUD_API {
 
 	protected $db;
